@@ -1,0 +1,46 @@
+#+AUTHOR: Zachary Rump
+#+DATE: 2017-03-22
+#+TITLE: ECE 4220
+#+OPTIONS: toc:nil H:4 num:0 ^:nil
+#+LATEX_HEADER: \usepackage[margin=0.5in]{geometry}
+\overfullrule=2cm
+* Prelab 5
+** Prelab Questions
+Explain the functions and parameters needed to:
+*** Create a socket
+**** int socket(int domain, int type, int protocol)
+***** domain -> AF_INET for IPv4.
+***** type -> SOCKET_DGRAM for UDP.
+***** protocol -> Select protocol within protocol family. Set to 0 for default (or single option) protocol.
+*** Write to a socket
+**** ssize_t send(int sockfd, const void *buf, size_t len, int flags)
+***** sockfd - file descriptor.
+***** buf - void pointer to buffer (data to be written).
+***** len - length of message in buf (bytes).
+***** flags - Bitwise OR of potential flags (man 2 sendto).
+***** Returns: ssize_t number of bytes sent on success, or -1 and set errno on fail. Doesn't detect failure to deliver. 
+****** Note: Can use write() syscall on any file descriptor including socket, but doesn't handle flags.
+*** Read from a socket
+**** ssize_t recv(int sockfd, void *buf, size_t len, int flags)
+***** sockfd - file descriptor.
+***** buf - pointer to buffer (incoming data destination).
+***** len - length of message to be received.
+***** flags - Bitwise OR of potential flags (man 2 recvfrom).
+***** Returns: ssize_t length of message on success, or -1 and set errno.
+****** Note: Can use read() syscall on any file descriptor including socket, but doesn't handle flags.
+*** Bind a socket
+**** int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen)
+***** sockfd - file descriptor.
+***** addr - struct sockaddr to be populated with address to bind.
+***** addrlen - socklen_t size of the sockaddr addr. I.e. sizeof(addr).
+***** Returns: 0 on success. On error returns -1 and sets errno.
+*** Change socket permissions
+**** int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t optlen)
+***** sockfd - file descriptor. 
+***** level - protocol level of the option to be changed. See 'man 3 getprotoent'.
+***** optname - Passed to appropriate protocol module. See 'man 7 socket.' and protocol man pages.
+***** optval - pointer to buffer to be filled with the value for the requested options.
+***** optlen - size of buffer pointed to by optval. Will be updated with the actual size of the value returned.
+***** Returns: 0 on success; -1 and set errno on failure.
+** Flowcharts / Psuedocode
+[[./lab5_flowchart.png]]
