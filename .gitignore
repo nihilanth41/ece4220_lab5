@@ -1,3 +1,5 @@
 *.swp
 *.swo
 *.tex
+/server_client_examples/a.out
+/server_client_examples/client_udp.bin
