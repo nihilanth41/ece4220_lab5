@@ -28,9 +28,9 @@ int main(int argc, char **argv) {
   char buf[MSG_SIZE]; // for receive messages
   char str_buf[MSG_SIZE]; // for sprintf
   char tok_buf[MSG_SIZE]; // for strtok
+  char ip_str[INET_ADDRSTRLEN];
   struct timeval read_timeout = { .tv_sec = 0, .tv_usec = VOTE_READ_TIMEOUT_USEC };
   int VOTES[IP_MAX + 1] = { 0 };
-
 
   // Check input args for port #
   if(argc < 3) {
@@ -54,6 +54,11 @@ int main(int argc, char **argv) {
   // IP Address
   bcopy((char *)hp->h_addr, (char *)&server.sin_addr, hp->h_length);
   length = sizeof(server);
+
+  // Get ip address as string
+  struct sockaddr_in *ipv4Addr = (struct sockaddr_in*)&server;
+  struct in_addr ipAddr = ipv4Addr->sin_addr;
+  inet_ntop(AF_INET, &ipAddr, ip_str, INET_ADDRSTRLEN);
 
   // Connectionless ipv4 socket (domain, type, protocol=0)
   sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -82,7 +87,6 @@ int main(int argc, char **argv) {
 
   while(1)
     {
-      
       // Wait for message from client.
        n = recvfrom(sock, buf, MSG_SIZE, 0, (struct sockaddr *)&from, &fromlen);
        if(n < 0) {
@@ -96,7 +100,7 @@ int main(int argc, char **argv) {
 	   printf("WHOIS ack.\n");
 	   if(isMaster)
 	     {
-	       sprintf(&str_buf, "Zach on board %s is the master", hp->h_addr);
+	       sprintf(&str_buf, "Zach on board %s is the master", ip_str);
 	       // Write message to broadcast address.
 	       n = sendto(sock, &str_buf, strlen(str_buf), 0, (struct sockaddr *)&server, fromlen);
 	       if(n < 0) {
