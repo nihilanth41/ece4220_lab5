@@ -15,7 +15,39 @@
 #define IP_MAX 10
 #define IP_MIN 1
 #define VOTE_TIMEOUT_SEC 5
-#define BROADCAST_ADDR 10.3.52.255
+//#define BROADCAST_ADDR 10.3.52.255
+#define BROADCAST_ADDR 127.0.0.1
+
+int VOTES[IP_MAX + 1] = { 0 };
+int last_octet; // To store the identifier for this instance
+// Tally votes. Return 1 if this program is the new master, 0 otherwise;
+int newMaster(void) {
+  int i;
+  int max_votes = -1;
+  int new_master = -1;
+  for(i=1; i<IP_MAX+1; i++)
+    {
+      printf("[%d]: %d\n", i, VOTES[i]);
+      if(VOTES[i] > max_votes)
+	{
+	  new_master = i;
+	  max_votes = VOTES[i];
+	}
+      else if(max_votes == VOTES[i])
+	{
+	  if(i > new_master)
+	    {
+	      new_master = i;
+	    }
+	}
+    }
+  if(new_master == last_octet)
+    {
+      return 1;
+    }
+  return 0;
+}
+      
 
 int main(int argc, char **argv) {
   int sock, n;
@@ -32,8 +64,9 @@ int main(int argc, char **argv) {
   char str_buf[MSG_SIZE]; // for sprintf
   char tok_buf[MSG_SIZE]; // for strtok
   char ip_str[INET_ADDRSTRLEN];
+  
   struct timeval read_timeout = { .tv_sec = VOTE_TIMEOUT_SEC, .tv_usec = 0};
-  int VOTES[IP_MAX + 1] = { 0 };
+  
 
   // Check input args for port #
   if(argc < 3) {
@@ -62,6 +95,15 @@ int main(int argc, char **argv) {
   struct sockaddr_in *ipv4Addr = (struct sockaddr_in*)&server;
   struct in_addr ipAddr = ipv4Addr->sin_addr;
   inet_ntop(AF_INET, &ipAddr, ip_str, INET_ADDRSTRLEN);
+  strncpy(&tok_buf, &ip_str, strlen(ip_str));
+  char *my_id = strtok(&ip_str, ".");
+  int i;
+  for(i=0; i<3; i++)
+    {
+      my_id = strtok(NULL, ".");
+    }
+  last_octet = atoi(my_id);
+  printf("My identifier: %d\n", last_octet);
 
   // Connectionless ipv4 socket (domain, type, protocol=0)
   sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -132,7 +174,7 @@ int main(int argc, char **argv) {
 		   // Get random number between 1-10 for the last octet
 		   // Zeroes represent the min number
 		   int r = rand() % (IP_MAX + 1 - IP_MIN) + IP_MIN;
-		   VOTES[r]++;
+		   //VOTES[r]++;
 		   sprintf(str_buf, "# 10.3.52.%d", r);
 		   // Send vote to broadcast
 		   server.sin_addr.s_addr = broadcast_addr;
@@ -158,7 +200,9 @@ int main(int argc, char **argv) {
 			 {
 			   vote_num = strtok(NULL, ".");
 			 }
-		       printf("Vote: %s\n", vote_num);
+		       int vote_index = atoi(vote_num);
+		       VOTES[vote_index]++;
+		       printf("Vote: %d\n", vote_index);
 		     }
 		     bzero(buf, MSG_SIZE);
 		     bzero(tok_buf, MSG_SIZE);
@@ -173,9 +217,12 @@ int main(int argc, char **argv) {
 		   }
 		    // Change address back from broadcast
 		   server.sin_addr.s_addr = server_addr;
-
 		   // Tally votes
-
+		   if(newMaster())
+		     {
+		       printf("I am the new master\n");
+		       isMaster = 1;
+		     }
 		 } // Voting not initiated
 		else
 		  {
