@@ -14,19 +14,23 @@
 #define MSG_SIZE 40
 #define IP_MAX 10
 #define IP_MIN 1
+#define VOTE_READ_TIMEOUT_USEC 500000
 
 int main(int argc, char **argv) {
   int sock, n;
   struct sockaddr_in server;
   struct sockaddr_in from;
-  //struct sockaddr_in broadcast_addr = inet_addr("10.3.52.255");
-  struct sockaddr_in broadcast_addr = inet_addr("127.0.0.1");
   struct hostent *hp = NULL;
   int length = sizeof(server);
   socklen_t fromlen = sizeof(struct sockaddr_in);
   unsigned int opt_val_bool = 1; // To pass to setsockopt()
   unsigned int isMaster = 0;
-  char buf[MSG_SIZE];
+  char buf[MSG_SIZE]; // for receive messages
+  char str_buf[MSG_SIZE]; // for sprintf
+  char tok_buf[MSG_SIZE]; // for strtok
+  struct timeval read_timeout = { .tv_sec = 0, .tv_usec = VOTE_READ_TIMEOUT_USEC };
+  int VOTES[IP_MAX + 1] = { 0 };
+
 
   // Check input args for port #
   if(argc < 3) {
@@ -49,8 +53,6 @@ int main(int argc, char **argv) {
   }
   // IP Address
   bcopy((char *)hp->h_addr, (char *)&server.sin_addr, hp->h_length);
-  // Port
-  bcopy((char *)argv[1], (char *)&server.sin_addr, strlen(argv[1])+1);
   length = sizeof(server);
 
   // Connectionless ipv4 socket (domain, type, protocol=0)
@@ -80,71 +82,60 @@ int main(int argc, char **argv) {
 
   while(1)
     {
-      // For sprintf() 
-      str_buf[MSG_SIZE];
+      
       // Wait for message from client.
        n = recvfrom(sock, buf, MSG_SIZE, 0, (struct sockaddr *)&from, &fromlen);
        if(n < 0) {
-	   error("recvfrom");
+	   perror("recvfrom");
 	 }
-
        // DEBUG
-       printf("Received datagram. It says: %s", buf);
-       if(0 == strcmp(buf, "WHOIS")
+       printf("Received datagram. It says: %s, %d\n", buf, n);
+       if(0 == strcmp(buf, "WHOIS\n"))
 	 {
+	   bzero(buf, MSG_SIZE);
+	   printf("WHOIS ack.\n");
 	   if(isMaster)
 	     {
-	       sprintf(&str_buf, "Zach on board %s is the master", inet_ntoa(&server.sin_addr->s_addr));
+	       sprintf(&str_buf, "Zach on board %s is the master", hp->h_addr);
 	       // Write message to broadcast address.
-	       n = sendto(sock, &str_buf, strlen(str_buf), 0, (struct sockaddr *)&broadcast_addr, fromlen);
+	       n = sendto(sock, &str_buf, strlen(str_buf), 0, (struct sockaddr *)&server, fromlen);
 	       if(n < 0) {
-		 error("sendto");
+		 perror("sendto");
 	       }
 	     }
-	   else // Wait for another master to reply or a WHOIS
+	   else // Wait for another master to reply or a VOTE
 	     {
-		n = recvfrom(sock, buf, MSG_SIZE, 0, (struct sockaddr *)&from, &fromlen);
-		if(n < 0) {
-		    error("recvfrom");
-		    }
-		printf("Received datagram. It says: %s", buf);
-		if(0 == strcmp(buf, "VOTE"))
-		  {
-		    // No master reply
-		    // Voting logic
-		    // Get random number between 1-10 for the last octet
-		    // Zeroes represent the min number
-		    int r = rand() % (IP_MAX + 1 - IP_MIN) + IP_MIN;
-		    sprintf(str_buf, "# 10.3.52.%d", r);
-		    n = sendto(sock, &str_buf, strlen(str_buf), 0, (struct sockaddr *)&broadcast_addr, fromlen);
-		    if(n < 0) {
-			error("sendto");
-		    }
+	       n = recvfrom(sock, buf, MSG_SIZE, 0, (struct sockaddr *)&from, &fromlen);
+	       if(n < 0) {
+		 perror("recvfrom");
+	       }
+	       printf("Received datagram. It says: %s %d", buf, n);
+	       if(0 == strcmp(buf, "VOTE\n"))
+		 {
+		   printf("Voting initiated.\n");
+		   // No master reply =>
+		   // Send and receive votes
 
-
-
-
-		  }
+		   // Get random number between 1-10 for the last octet
+		   // Zeroes represent the min number
+		   int r = rand() % (IP_MAX + 1 - IP_MIN) + IP_MIN;
+		   sprintf(str_buf, "# 10.3.52.%d", r);
+		   // Send vote
+		   n = sendto(sock, &str_buf, MSG_SIZE, 0, (struct sockaddr *)&server, fromlen);
+		   if(n < 0) {
+		     perror("sendto");
+		   }
+		   // Set timeout
+		 }
 		else
 		  {
-		    // Master reply
-		    
-		    
-		    
+		    // Master replied
+		  }
+	     }
+	 } // endifwhois
+    } // end while
 
+return EXIT_SUCCESS;
 
+}
 
-
-
-
-
-
-
-
-
-
-
-
-
-    return EXIT_SUCCESS;
-    }
