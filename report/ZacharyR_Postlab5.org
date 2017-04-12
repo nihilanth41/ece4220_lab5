@@ -6,239 +6,280 @@
 \overfullrule=2cm
 * Lab 5 Report
 ** Objectives
-The primary objectives for Lab 4 were to learn about inter-process communication (IPC) and syncronization using pipes and semaphores.
+The primary objective for Lab 5 was to learn about inter-process
+communication and synchronization in a distributed environment.
 *** Lab Description
 The specific objectives of the Lab:
-1. Learn about the differences between named and unnamed pipes.
-2. Get more experience with real time tasks and syncronization.
-3. Introduce the serial port on TS-7250.
-4. Learn about communication between kernel modules and userspace.
+1. Learn to use sockets for communication.
+2. Implement a Master-Slave setup.
 ** Implementation
-The implementation of this lab can be broken down into multiple components. The
-first component was provided as a binary, and simulates the device sending gps
-data. It consists of a test program (test_serial) that sends a different uint8_t
-over the TS-7250 serial port every 250ms. The second component is a kernel
-module running on the TS-7250. The kernel module creates a real-time fifo (under
-/dev/rtf) and initializes a real time task (75ms period) to check for a push
-button (B0) event.  If the button is pressed, the real time task will get the
-current time and write the timestamp to the fifo.  The third component, the main
-program, runs on the TS-7250, it reads data from the serial port and real time
-fifo, performs linear interpolation on the timestamps, and sends the data to a
-thread which writes all the information to stdout.
+The implementation for this lab consisted of a single server program. The
+program initializes itself as a 'slave', then opens a network (UDP) socket (port
+specified on command line) and receives messages, e.g. WHOIS, VOTE.  If the
+program receives a WHOIS request and it is the master it responds on the
+broadcast address.  If it receives a VOTE request it will generate a random
+number between 1-10, use it as the last octet, and send it's vote on the
+broadcast address. Additionally, it will receive the votes from all the other
+servers and tally them to determine the new master.
 *** Flowcharts
 #+ATTR_LATEX: :width 500px :height 376px
-[[./images/flowchart_pt1.png]]`
+[[./images/part1.png]]
 
-Figure 1. Flowchart from the Lab 4 document.
+
+Figure 1. Flowchart for Lab 4.
 ** Experiments and Results
-The program as a whole was tested by testing each component individually in
-order. The serial communication was setup first, then the kernel module
-responding to the push button, then the dynamic threads reading from the fifo,
-and finally the thread to print to print the output.
+Didn't actually get the demo working in class, but I did manage to test parts of
+the functionality with other servers.  Mostly tested it by using the loopback
+address (127.0.0.1) as the broadcast and running one of the example programs to
+send messages. Using this method I was at least able to get the server to respond to a
+WHOIS, and VOTE.
 ** Discussion
-The main issue encountered in the lab was probably misunderstanding which
-functions could be used in kernel modules. Got stuck trying to use system calls
-like open,write() before getting redirected to the real-time fifos from the
-prelab. The other thing that caused trouble was figuring out how to handle
-multiple push button events with the interpolation. The TA helped realize how to
-use dynamic threads, and how to determine the necessary number of threads based
-on the period of the fifo button event and the period of the serial port
-data. I.e. 250ms/75ms = 4 threads max. Main thing I learned was probably the
-role of kernel modules and the different functions available to them.
-
+The most painful part of this lab was dealing with the conversion between the
+sockaddr integer value and the string ip address. I.e. string parsing. Also the
+logic to keep track of the votes.  Main thing I learned was just about the
+socket functions and data structs in general.  Not very fun to use initially,
+but now that I have a cursory familiarity it should be easier to learn more
+about them.
 *** Post Lab Questions
-- Imagine that you want to do the interpolation with more GPS points in order
-   to have a more accurate result. What would be changed? What kind of buffer
-   would you need? Why?
-  - Possibly would increase the period of the task responding to the push button
-    (gps event), and increase the size of the buffer, and the number of dynamic
-    threads that are available to respond.
-
-- When your user space program reads from the FIFO, is this a blocking operation or non-blocking operation? How do you know?
-  - This is a blocking operation because the program doesn't continue executing until there is data to read.
 ** Code  
-Note this is code incomplete. See the actual source code submission.
-*** Main Program
-#+NAME: lab4_main.c
+#+NAME: lab5.c
 #+ATTR_LATEX: :foat nil
 #+BEGIN_SRC C
 #include <stdio.h>
-#include <stdint.h>
+#include <stdlib.h>
 #include <unistd.h>
-#include <sys/time.h>
 #include <sys/types.h>
-#include <fcntl.h>
-#include <pthread.h>
-#include "serial_ece4220.h"
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h> // gethostbyname
+#include <string.h>
+#include <strings.h> // bcopy
+#include <errno.h>
+#include <time.h>
 
-#define DATA_MAX 256
-#define FIFO_ID 1
+#define MSG_SIZE 40
+#define IP_MAX 10
+#define IP_MIN 1
+#define VOTE_TIMEOUT_SEC 5
+//#define BROADCAST_ADDR 10.3.52.255
+#define BROADCAST_ADDR 127.0.0.1
 
-typedef struct gps_st {
-	uint8_t data;
-	struct timeval tv;
-} gps_t;
-
-pthread_t tid;
-
-// Common buffer for data and time
-int i=0;
-gps_t data_buffer[DATA_MAX];
-
-void read_fifo(void *args) {
-	struct timeval tv_buf;
-	int fd = open("/dev/rtf/1", O_RDWR);
-	if(-1 == fd)
+int VOTES[IP_MAX + 1] = { 0 };
+int last_octet; // To store the identifier for this instance
+// Tally votes. Return 1 if this program is the new master, 0 otherwise;
+int newMaster(void) {
+  int i;
+  int max_votes = -1;
+  int new_master = -1;
+  for(i=1; i<IP_MAX+1; i++)
+    {
+      printf("[%d]: %d\n", i, VOTES[i]);
+      if(VOTES[i] > max_votes)
 	{
-		return;
+	  new_master = i;
+	  max_votes = VOTES[i];
 	}
-	while(1) {
-		int count = read(fd, &tv_buf, sizeof(tv_buf));
-		if(count < 0)
-		{
-			return;
-		}
-		else
-		{
-			// spin up thread on each button press to wait for the next data
-			printf("Button pressed\n");
-			printf("Kernel Event Time: %u.%ld \n", (unsigned int)tv_buf.tv_sec, tv_buf.tv_usec);
-			printf("Last GPS Event: Data: %d, Time: %u.%ld \n", data_buffer[i-1].data, (unsigned int)data_buffer[i-1].tv.tv_sec, data_buffer[i-1].tv.tv_usec);
-		}
+      else if(max_votes == VOTES[i])
+	{
+	  if(i > new_master)
+	    {
+	      new_master = i;
+	    }
 	}
+    }
+  if(new_master == last_octet)
+    {
+      return 1;
+    }
+  return 0;
 }
+      
 
 int main(int argc, char **argv) {
-	// Create thread to read from fifo (kernel)
-	pthread_create(&tid, NULL, (void *)read_fifo, NULL); //(void *)
-	// Attempt to open serial port
-	int port_id = serial_open(0, 0, 5);
-        unsigned char buf=0;
-	ssize_t num_bytes=0;
-	// Endlessly loop and read from serial port
-	while(1)
-	{
-		// Read into array at pos(i);
-		for(i=0; i<DATA_MAX; i++)
-		{
-			struct timeval *tv = &(data_buffer[i].tv);
-			num_bytes = read(port_id, &buf, 1);
-			if(-1 == num_bytes)
-			{
-				// Error read()
-				break;
-			}
-			data_buffer[i].data = buf;
-			// Get timestamp
-			int ret = gettimeofday(tv, NULL);
-			if(-1 == ret)
-			{
-				// Error gettime()
-				break; 
-			}
-			//printf("Data: %d, Time: %u.%ld \n", data_buffer[i].data, (unsigned int)data_buffer[i].tv.tv_sec, data_buffer[i].tv.tv_usec);
-			//fflush(stdout);
-		}
-	}
-	serial_close(port_id);
-	return 0;
+  int sock, n;
+  struct sockaddr_in server;
+  struct sockaddr_in from;
+  struct hostent *hp = NULL;
+  unsigned long broadcast_addr = inet_addr("BROADCAST_ADDR");
+  unsigned long server_addr; 
+  int length = sizeof(server);
+  socklen_t fromlen = sizeof(struct sockaddr_in);
+  unsigned int opt_val_bool = 1; // To pass to setsockopt()
+  unsigned int isMaster = 0;
+  char buf[MSG_SIZE]; // for receive messages
+  char str_buf[MSG_SIZE]; // for sprintf
+  char tok_buf[MSG_SIZE]; // for strtok
+  char ip_str[INET_ADDRSTRLEN];
+  
+  struct timeval read_timeout = { .tv_sec = VOTE_TIMEOUT_SEC, .tv_usec = 0};
+  
+
+  // Check input args for port #
+  if(argc < 3) {
+    fprintf(stderr, "Usage is %s <hostname> <port>\n", argv[0]);
+    return EXIT_FAILURE;
+  }
+
+  // Random numbers seed
+  srand(time(NULL));
+  // Set server properties
+  server.sin_family = AF_INET;
+  // Get port # from input 
+  server.sin_port = htons(atoi(argv[2]));
+  // Get ip address by hostname
+  hp = gethostbyname(argv[1]);
+  if(0 == hp) {
+    // Error
+    fprintf(stderr, "Error: unknown host\n");
+    return EXIT_FAILURE;
+  }
+  // IP Address
+  bcopy((char *)hp->h_addr, (char *)&server.sin_addr, hp->h_length);
+  length = sizeof(server);
+
+  // Get ip address as string
+  struct sockaddr_in *ipv4Addr = (struct sockaddr_in*)&server;
+  struct in_addr ipAddr = ipv4Addr->sin_addr;
+  inet_ntop(AF_INET, &ipAddr, ip_str, INET_ADDRSTRLEN);
+  strncpy(&tok_buf, &ip_str, strlen(ip_str));
+  char *my_id = strtok(&ip_str, ".");
+  int i;
+  for(i=0; i<3; i++)
+    {
+      my_id = strtok(NULL, ".");
+    }
+  last_octet = atoi(my_id);
+  printf("My identifier: %d\n", last_octet);
+
+  // Connectionless ipv4 socket (domain, type, protocol=0)
+  sock = socket(AF_INET, SOCK_DGRAM, 0);
+  if(sock < 0)
+    {
+      // Error creating socket
+      fprintf(stderr, "Error in socket(): %s\n", strerror(errno));
+      return EXIT_FAILURE;
+    }
+
+  // bind socket to address of host + port # (command line)
+  if(bind(sock, (struct sockaddr *)&server, length) < 0 )
+    {
+      // Error binding
+      fprintf(stderr, "Error in bind(): %s\n", strerror(errno));
+      return EXIT_FAILURE;
+    }
+
+  // set socket perms to allow broadcast
+  if(setsockopt(sock, SOL_SOCKET, SO_BROADCAST, (void *)&opt_val_bool, sizeof(opt_val_bool)) < 0 )
+    {
+      // Error setting options
+      fprintf(stderr, "Error in setsockopt(): %s\n", strerror(errno));
+      return EXIT_FAILURE;
+    }
+
+  while(1)
+    {
+      // Wait for message from client.
+       n = recvfrom(sock, buf, MSG_SIZE, 0, (struct sockaddr *)&from, &fromlen);
+       if(n < 0) {
+	   perror("recvfrom");
+	 }
+       // DEBUG
+       printf("Received datagram. It says: %s, %d\n", buf, n);
+       if(0 == strcmp(buf, "WHOIS\n"))
+	 {
+	   bzero(buf, MSG_SIZE);
+	   printf("WHOIS ack.\n");
+	   if(isMaster)
+	     {
+	       server_addr = server.sin_addr.s_addr;
+	       server.sin_addr.s_addr = broadcast_addr;
+	       sprintf(&str_buf, "Zach on board %s is the master", ip_str);
+	       // Write message to broadcast address.
+	       // TODO change to broadcast
+	       n = sendto(sock, &str_buf, strlen(str_buf), 0, (struct sockaddr *)&server, fromlen);
+	       if(n < 0) {
+		 perror("sendto");
+	       }
+	       server.sin_addr.s_addr = server_addr;
+	     }
+	   else // Wait for another master to reply or a VOTE
+	     {
+	       n = recvfrom(sock, buf, MSG_SIZE, 0, (struct sockaddr *)&from, &fromlen);
+	       if(n < 0) {
+		 perror("recvfrom");
+	       }
+	       printf("Received datagram. It says: %s %d", buf, n);
+	       if(0 == strcmp(buf, "VOTE\n"))
+		 {
+		   // Clear votes
+		   memset(VOTES, 0, (IP_MAX + 1)*sizeof(int));
+		   bzero(tok_buf, MSG_SIZE);
+		   printf("Voting initiated.\n");
+		   // No master reply =>
+		   // Send and receive votes
+		   // Get random number between 1-10 for the last octet
+		   // Zeroes represent the min number
+		   int r = rand() % (IP_MAX + 1 - IP_MIN) + IP_MIN;
+		   //VOTES[r]++;
+		   sprintf(str_buf, "# 10.3.52.%d", r);
+		   // Send vote to broadcast
+		   server.sin_addr.s_addr = broadcast_addr;
+		   n = sendto(sock, &str_buf, MSG_SIZE, 0, (struct sockaddr *)&server, fromlen);
+		   if(n < 0) {
+		     perror("sendto");
+		   }
+		   
+		   // Set timeout and read votes
+		   read_timeout.tv_sec = VOTE_TIMEOUT_SEC;
+		   if(setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &read_timeout, sizeof(read_timeout)) < 0) {
+		     perror("Error setting socket timeout");
+		   }
+		   do {
+		     n = recvfrom(sock, buf, MSG_SIZE, 0, (struct sockaddr *)&from, &fromlen);
+		     // Check buf for leading '#' and parse ip
+		     if('#' == buf[0]) {
+		       printf("Vote received\n%s", buf);
+		       strncpy(&tok_buf, &buf, strlen(buf));
+		       char *vote_num = strtok(&tok_buf, ".");
+		       int i;
+		       for(i=0; i<3; i++)
+			 {
+			   vote_num = strtok(NULL, ".");
+			 }
+		       int vote_index = atoi(vote_num);
+		       VOTES[vote_index]++;
+		       printf("Vote: %d\n", vote_index);
+		     }
+		     bzero(buf, MSG_SIZE);
+		     bzero(tok_buf, MSG_SIZE);
+
+		     // Add vote
+		   } while(n > 0);
+
+		   // Disable timeout
+		   read_timeout.tv_sec = 0;
+		    if(setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &read_timeout, sizeof(struct timeval)) < 0) {
+		     perror("Error un-setting socket timeout");
+		   }
+		    // Change address back from broadcast
+		   server.sin_addr.s_addr = server_addr;
+		   // Tally votes
+		   if(newMaster())
+		     {
+		       printf("I am the new master\n");
+		       isMaster = 1;
+		     }
+		 } // Voting not initiated
+		else
+		  {
+		    // Master replied
+		  }
+	     }
+	 } // endifwhois
+    } // end while
+
+return EXIT_SUCCESS;
+
 }
 #+END_SRC
-*** Kernel Module
-#+NAME: lab4_p2.c
-#+ATTR_LATEX: :foat nil
-#+BEGIN_SRC C
-#ifndef MODULE 
-#define MODULE
-#endif
-
-#ifndef __KERNEL__
-#define __KERNEL__
-#endif
-
-#include <linux/module.h>
-#include <linux/kernel.h>
-#include <linux/time.h>
-#include <unistd.h>
-#include <rtai.h>
-#include <rtai_sched.h>
-#include <rtai_fifos.h>
-
-MODULE_LICENSE("GPL");
-
-#define NUM_PERIODS 1000 
-#define FIFO_ID 1
-RTIME period;
-RT_TASK t1;
-unsigned long *BasePtr, *PBDR, *PBDDR;	// pointers for port B DR/DDR
-
-void rt_process(void *args) {
-	// Open named pipe (get fd) -- write only
-	// Opens for writing will block until a process opens it for reading
-	// Unless specify O_NONBLOCK or O_NDELAY
-	while(1)
-	{
-		//http://www.cs.uml.edu/~fredm/courses/91.308/files/pipes.html
-		struct timeval tv;
-		// Detect button press on PORT B0
-		int button_status = (*PBDR & (1 << 0));
-		if(0 == button_status)
-		{
-			printk(KERN_INFO "Button pressed!\n");
-			// Button pressed -> get time
-			 do_gettimeofday(&tv);
-			// Attempt to write timeval struct to fifo
-			int ret = rtf_put(FIFO_ID, &tv, sizeof(tv));
-			if(ret < 0)
-			{
-				printk(KERN_INFO "Error writing to rtfifo\n");
-			}
-		}
-		rt_task_wait_period();
-	}
-}
-
-int init_module(void) {
-	// Attempt to map file descriptor
-	BasePtr = (unsigned long *) __ioremap(0x80840000, 4096, 0);
-	if(NULL == BasePtr) 
-	{
-		printk(KERN_INFO "Unable to map memory space\n");
-		return -1;
-	}
-
-	int ret = rtf_create(FIFO_ID, sizeof(struct timeval));
-	
-	// Configure PORTB registers
-	PBDR = BasePtr + 1;
-	PBDDR = BasePtr + 5;
-        // Set push button as input
-	// button is PORTB0
-	*PBDDR &= ~(1 << 0);
-	
-	// Start realtime timer
-	rt_set_periodic_mode();
-	// Task should 'go off' every 75ms
-	// 1 ms = 1000000 ns
-	// 75 ms = 75000000
-	// 1 ms
-	period = start_rt_timer(nano2count(1000000));
-
-	// Initialize rt task
-	rt_task_init(&t1, (void *)rt_process, 0, 256, 0, 0, 0);
-	rt_task_make_periodic(&t1, 0*period, 75*period);
-	rt_task_resume(&t1);
-
-	printk(KERN_INFO "MODULE INSTALLED\n");
-	return 0;
-}
-
-void cleanup_module(void)
-{
-	rt_task_delete(&t1);
-	stop_rt_timer();
-	
-	printk(KERN_INFO "MODULE REMOVED\n");
-	return;
-}
-#+END_SRC  
